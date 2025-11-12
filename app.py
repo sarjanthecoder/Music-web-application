@@ -5,33 +5,27 @@ import logging
 import os
 from dotenv import load_dotenv
 
-# ✅ Load environment variables
+# Load environment variables from .env file
 load_dotenv()
 
 app = Flask(__name__)
 CORS(app)
 
-# ✅ Logging setup
+# Logging setup
 logging.basicConfig(level=logging.DEBUG, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-# ✅ YouTube API key from .env
+# Fetch YouTube API Key from environment
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
 if not YOUTUBE_API_KEY:
-    logger.warning("⚠️ YOUTUBE_API_KEY not found! Please check your .env file.")
+    logger.warning("⚠️ YOUTUBE_API_KEY not found in environment variables. Please check your .env file.")
 
-# -----------------------------------------------------
-# 🏠 Home Route
-# -----------------------------------------------------
 @app.route('/')
 def home():
     return render_template('index.html')
 
 
-# -----------------------------------------------------
-# 🔍 YouTube Search Route
-# -----------------------------------------------------
 @app.route('/search', methods=['POST'])
 def search():
     query = request.form.get('query', '').strip()
@@ -76,40 +70,37 @@ def search():
         return jsonify(results)
 
     except Exception as e:
-        logger.exception("❌ Error during YouTube search")
+        logger.exception("Error during YouTube search")
         return jsonify({"error": str(e)}), 500
 
 
-# -----------------------------------------------------
-# 🎵 Stream YouTube Audio
-# -----------------------------------------------------
 @app.route('/get-audio/<video_id>', methods=['GET'])
 def get_audio(video_id):
-    """Proxy YouTube audio stream through our server to bypass CORS."""
     logger.info(f"🎧 Fetching audio for video ID: {video_id}")
 
     try:
         from yt_dlp import YoutubeDL
     except ImportError:
         logger.error("❌ yt-dlp not installed. Run: pip install yt-dlp")
-        return jsonify({"error": "yt-dlp not installed. Run: pip install yt-dlp"}), 500
+        return jsonify({"error": "yt-dlp not installed"}), 500
 
     try:
-        # Fetch the best available audio stream
-        ydl_opts = {'format': 'bestaudio', 'quiet': True, 'no_warnings': True}
+        ydl_opts = {
+            'format': 'bestaudio[ext=m4a]/bestaudio/mp3/bestaudio',
+            'quiet': True,
+            'no_warnings': True,
+        }
 
         with YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f'https://www.youtube.com/watch?v={video_id}', download=False)
             audio_url = info.get('url')
-
             if not audio_url:
-                raise Exception("No audio stream found")
+                raise Exception("No audio URL found in video info")
 
-        logger.info("✅ Audio stream URL obtained successfully")
+        logger.info(f"✅ Got audio URL: {audio_url[:80]}...")
 
-        # Stream audio through Flask proxy
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(audio_url, stream=True, timeout=60, headers=headers, allow_redirects=True)
+        response = requests.get(audio_url, stream=True, timeout=120, headers=headers, allow_redirects=True)
         response.raise_for_status()
 
         def generate():
@@ -119,32 +110,15 @@ def get_audio(video_id):
 
         return Response(
             generate(),
-            mimetype='audio/mpeg',
+            mimetype='audio/mp4',
             headers={
                 'Access-Control-Allow-Origin': '*',
-                'Content-Type': 'audio/mpeg',
+                'Content-Type': 'audio/mp4',
                 'Cache-Control': 'no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0',
                 'Connection': 'keep-alive'
             }
         )
 
     except Exception as e:
-        logger.exception(f"❌ Streaming failed for video {video_id}")
+        logger.exception(f"❌ Streaming failed for {video_id}")
         return jsonify({"error": str(e)}), 500
-
-
-# -----------------------------------------------------
-# 🩺 Health Check
-# -----------------------------------------------------
-@app.route('/health', methods=['GET'])
-def health():
-    return jsonify({"status": "ok"}), 200
-
-
-# -----------------------------------------------------
-# 🚀 Run Server
-# -----------------------------------------------------
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    logger.info(f"🚀 Starting Songify YouTube App on port {port}")
-    app.run(host="0.0.0.0", port=port)
